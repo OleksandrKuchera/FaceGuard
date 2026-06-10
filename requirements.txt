@@ -1,0 +1,49 @@
+# ═══════════════════════════════════════════
+# FaceGuard — Повний список залежностей
+# ═══════════════════════════════════════════
+
+# ─── Django Core ───────────────────────────
+Django==5.0.6
+djangorestframework==3.15.2
+djangorestframework-simplejwt==5.3.1
+django-cors-headers==4.3.1
+django-filter==24.2
+python-decouple==3.8
+
+# ─── Real-time (WebSocket) ─────────────────
+channels==4.1.0
+channels-redis==4.2.0
+daphne==4.1.0               # ASGI сервер
+
+# ─── Async / Task Queue ────────────────────
+celery==5.4.0
+redis==5.0.6
+django-celery-beat==2.6.0   # scheduled tasks
+django-celery-results==2.5.1
+
+# ─── ML / Computer Vision ─────────────────
+face_recognition==1.3.0
+opencv-python==4.11.0.86
+numpy==2.2.4
+scikit-learn==1.6.1
+pillow==11.1.0
+dlib>=19.7                   # потребує cmake + C++ compiler
+
+# ─── Security / Encryption ─────────────────
+cryptography==42.0.5        # Fernet шифрування biometric data
+
+# ─── Reports ───────────────────────────────
+reportlab==4.2.2             # PDF генерація
+openpyxl==3.1.4              # Excel (.xlsx)
+
+# ─── Database ──────────────────────────────
+psycopg2-binary==2.9.9       # PostgreSQL adapter
+
+# ─── Development / Testing ─────────────────
+pytest==8.2.0
+pytest-django==4.8.0
+pytest-asyncio==0.23.7
+factory-boy==3.3.0
+coverage==7.5.1
+black==24.4.2
+flake8==7.0.0

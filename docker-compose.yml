@@ -1,0 +1,143 @@
+services:
+  # ─── PostgreSQL ─────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: faceguard
+      POSTGRES_USER: faceguard
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-faceguard_secret}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "faceguard"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── Redis ──────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      retries: 3
+
+  # ─── Django Web (ASGI via Daphne) ───────────
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: daphne -b 0.0.0.0 -p 8000 faceguard.asgi:application
+    restart: unless-stopped
+    volumes:
+      - .:/app
+      - media_data:/app/media
+      - ml_models:/app/ml_models
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - DJANGO_SETTINGS_MODULE=faceguard.settings.production
+      # Docker-internal service hostnames override any localhost values from .env
+      - DATABASE_URL=postgresql://faceguard:${DB_PASSWORD:-faceguard_secret}@postgres:5432/faceguard
+      - DB_HOST=postgres
+      - DB_USER=faceguard
+      - DB_PASSWORD=${DB_PASSWORD:-faceguard_secret}
+      - DB_NAME=faceguard
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      # Якщо в .env є ALLOWED_HOSTS=yourdomain.com — воно підставиться.
+      # За замовчуванням включаємо 'web' (docker hostname) + localhost.
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS:-localhost,127.0.0.1,web}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ─── Celery Worker ──────────────────────────
+  celery:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A faceguard worker -l info -Q default,cameras,reports -c 4
+    restart: unless-stopped
+    volumes:
+      - .:/app
+      - media_data:/app/media
+      - ml_models:/app/ml_models
+    env_file:
+      - .env
+    environment:
+      - DJANGO_SETTINGS_MODULE=faceguard.settings.production
+      - DB_HOST=postgres
+      - DB_USER=faceguard
+      - DB_PASSWORD=${DB_PASSWORD:-faceguard_secret}
+      - DB_NAME=faceguard
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ─── Celery Beat (Scheduler) ────────────────
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: >
+      sh -c "
+        echo 'Waiting for migrations...' &&
+        python manage.py wait_for_db --settings=faceguard.settings.production 2>/dev/null || sleep 10 &&
+        celery -A faceguard beat -l info
+          --scheduler django_celery_beat.schedulers:DatabaseScheduler
+      "
+    restart: unless-stopped
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    environment:
+      - DJANGO_SETTINGS_MODULE=faceguard.settings.production
+      - DB_HOST=postgres
+      - DB_USER=faceguard
+      - DB_PASSWORD=${DB_PASSWORD:-faceguard_secret}
+      - DB_NAME=faceguard
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ─── React Frontend (nginx) ─────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - web
+
+volumes:
+  postgres_data:
+  redis_data:
+  media_data:
+  ml_models:

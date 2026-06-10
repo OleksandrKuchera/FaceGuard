@@ -1,0 +1,42 @@
+services:
+  exp-01:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./dataset:/app/dataset:ro
+      - ./output:/app/output
+    command: python exp_01_distances.py --dataset /app/dataset --output-dir /app/output
+    environment:
+      - PYTHONUNBUFFERED=1
+
+  exp-02:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./dataset:/app/dataset:ro
+      - ./output:/app/output
+    command: python exp_02_metrics.py --dataset /app/dataset --output-dir /app/output
+    environment:
+      - PYTHONUNBUFFERED=1
+
+  exp-03:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./output:/app/output
+    command: python exp_03_encryption.py --output-dir /app/output
+    environment:
+      - PYTHONUNBUFFERED=1
+
+  exp-04:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./output:/app/output
+    command: python exp_04_pipeline.py --output-dir /app/output
+    environment:
+      - PYTHONUNBUFFERED=1

@@ -1,0 +1,202 @@
+# =============================================================================
+# FACEGUARD PROJECT — MASTER .gitignore
+# Django + ML + React/Vite frontend
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# 1. PYTHON / DJANGO
+# ---------------------------------------------------------------------------
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Distribution / packaging
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments (root + nested + any venv name)
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+*.venv
+
+# Django / SQLite
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+*.db
+db.json
+
+# Django static files (collectstatic)
+staticfiles/*
+!staticfiles/.gitkeep
+
+# Django media files (user uploads)
+media/*
+!media/.gitkeep
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# Translations
+*.pot
+*.mo
+
+# ---------------------------------------------------------------------------
+# 2. MACHINE LEARNING — MODELS & ARTIFACTS
+# ---------------------------------------------------------------------------
+
+# Directory with trained models
+ml_models/*
+!ml_models/.gitkeep
+
+# PyTorch / ONNX / TensorFlow / Keras / etc.
+*.pt
+*.pth
+*.onnx
+*.h5
+*.keras
+*.pkl
+*.pickle
+*.joblib
+*.pb
+*.tflite
+*.weights
+*.safetensors
+*.npy
+*.npz
+*.ckpt
+*.mlmodel
+*.caffemodel
+*.prototxt
+*.engine
+*.trt
+*.plan
+*.uff
+*.wts
+
+# ---------------------------------------------------------------------------
+# 3. EXPERIMENTS
+# ---------------------------------------------------------------------------
+
+# Experiments virtual environment
+experiments/venv/
+
+# Experiments outputs (graphs, CSVs, reports, PDFs)
+experiments/output/
+experiments/output_metrics/
+experiments/*.log
+
+# Jupyter notebooks & checkpoints
+*.ipynb
+.ipynb_checkpoints/
+
+# ---------------------------------------------------------------------------
+# 4. FRONTEND (React + Vite)
+# ---------------------------------------------------------------------------
+
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+frontend/.vite/
+frontend/coverage/
+frontend/*.tsbuildinfo
+
+# Frontend env files
+frontend/.env
+frontend/.env.*
+
+# ---------------------------------------------------------------------------
+# 5. ENVIRONMENT / SECRETS
+# ---------------------------------------------------------------------------
+
+.env
+.env.local
+.env.*.local
+!.env.example
+!.env.template
+
+# ---------------------------------------------------------------------------
+# 6. TESTING / COVERAGE / LINTING
+# ---------------------------------------------------------------------------
+
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.pytest_cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+
+# ---------------------------------------------------------------------------
+# 7. IDEs / EDITORS
+# ---------------------------------------------------------------------------
+
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ---------------------------------------------------------------------------
+# 8. OS FILES
+# ---------------------------------------------------------------------------
+
+.DS_Store
+Thumbs.db
+
+# ---------------------------------------------------------------------------
+# 9. DOCKER
+# ---------------------------------------------------------------------------
+
+docker-compose.override.yml
+
+# ---------------------------------------------------------------------------
+# 10. LOGS / TEMP / BACKUPS
+# ---------------------------------------------------------------------------
+
+logs/
+*.log
+*.local
+*.bak
+*.tmp
+*.temp
+*.cache
+
+# ---------------------------------------------------------------------------
+# 11. ARCHIVES / BINARIES
+# ---------------------------------------------------------------------------
+
+*.zip
+*.tar.gz
+*.tar.bz2
+*.7z
+*.rar

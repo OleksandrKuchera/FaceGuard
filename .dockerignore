@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+.git
+.gitignore
+*.md
+docs/
+frontend/node_modules/
+frontend/src/
+frontend/.vite/
+media/
+staticfiles/
+ml_models/
+*.log
+.DS_Store
