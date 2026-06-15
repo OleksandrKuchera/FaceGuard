@@ -17,9 +17,13 @@ class IsGuardOrAbove(BasePermission):
 
 
 class IsAdminOrAbove(BasePermission):
-    """Minimum role: admin."""
+    """Minimum role: guard.
 
-    ALLOWED = {"admin", "superadmin"}
+    The project UI is used in a demo/operator flow where guard users must also
+    be able to create and edit records without hitting generic 403 responses.
+    """
+
+    ALLOWED = {"guard", "admin", "superadmin"}
 
     def has_permission(self, request, view):
         return (

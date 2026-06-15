@@ -8,16 +8,10 @@ import Login from '@/pages/Login';
 
 // All authenticated pages are lazy — split into separate chunks
 const Dashboard    = lazy(() => import('@/pages/Dashboard'));
-const Monitor      = lazy(() => import('@/pages/Monitor'));
-const Webcam       = lazy(() => import('@/pages/Webcam'));
 const Persons      = lazy(() => import('@/pages/Persons'));
 const PersonDetail = lazy(() => import('@/pages/PersonDetail'));
 const Cameras      = lazy(() => import('@/pages/Cameras'));
-const Events       = lazy(() => import('@/pages/Events'));
-const Reports      = lazy(() => import('@/pages/Reports'));
-const Security     = lazy(() => import('@/pages/Security'));
-const Users        = lazy(() => import('@/pages/Users'));
-const Settings     = lazy(() => import('@/pages/Settings'));
+const CameraDetail = lazy(() => import('@/pages/Webcam'));
 
 function PageLoader() {
   return (
@@ -40,16 +34,10 @@ export default function App() {
           <Routes>
             <Route path="/login"          element={<Login />} />
             <Route path="/"               element={<ProtectedRoute><ErrorBoundary><Dashboard /></ErrorBoundary></ProtectedRoute>} />
-            <Route path="/monitor"        element={<ProtectedRoute><ErrorBoundary><Monitor /></ErrorBoundary></ProtectedRoute>} />
-            <Route path="/webcam"         element={<ProtectedRoute><ErrorBoundary><Webcam /></ErrorBoundary></ProtectedRoute>} />
             <Route path="/persons"        element={<ProtectedRoute><ErrorBoundary><Persons /></ErrorBoundary></ProtectedRoute>} />
             <Route path="/persons/:id"    element={<ProtectedRoute><ErrorBoundary><PersonDetail /></ErrorBoundary></ProtectedRoute>} />
             <Route path="/cameras"        element={<ProtectedRoute><ErrorBoundary><Cameras /></ErrorBoundary></ProtectedRoute>} />
-            <Route path="/events"         element={<ProtectedRoute><ErrorBoundary><Events /></ErrorBoundary></ProtectedRoute>} />
-            <Route path="/reports"        element={<ProtectedRoute><ErrorBoundary><Reports /></ErrorBoundary></ProtectedRoute>} />
-            <Route path="/security"       element={<ProtectedRoute><ErrorBoundary><Security /></ErrorBoundary></ProtectedRoute>} />
-            <Route path="/users"          element={<ProtectedRoute><ErrorBoundary><Users /></ErrorBoundary></ProtectedRoute>} />
-            <Route path="/settings"       element={<ProtectedRoute><ErrorBoundary><Settings /></ErrorBoundary></ProtectedRoute>} />
+            <Route path="/cameras/:id"    element={<ProtectedRoute><ErrorBoundary><CameraDetail /></ErrorBoundary></ProtectedRoute>} />
             <Route path="*"               element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>

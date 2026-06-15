@@ -1,11 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Layout from '@/components/Layout';
-import {
-  getCameras, createCamera, updateCamera, deleteCamera,
-  startCamera, stopCamera, testCamera, getSnapshot,
-} from '@/api/client';
-import type { Camera, CameraStatus } from '@/types';
+import { createCamera, getCameras, updateCamera, deleteCamera } from '@/api/client';
+import type { Camera } from '@/types';
 import { toast } from 'sonner';
+import { useNavigate } from 'react-router-dom';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -29,29 +27,12 @@ import {
   Tooltip, TooltipContent, TooltipTrigger,
 } from '@/components/ui/tooltip';
 import {
-  Plus, Play, Square, Wifi, Trash2, RefreshCw, Pencil,
-  Camera as CameraIcon, Image, Loader2, ScanLine,
+  Plus, RefreshCw, Pencil, Trash2, Camera as CameraIcon, Video, VideoOff, MonitorX, Copy,
 } from 'lucide-react';
-import { ZoneEditorDialog } from '@/components/ZoneEditor';
+import { loadDemoCameras, saveDemoCameras, type DemoCamera } from '@/utils/demoCameras';
 
-// ── Status helpers ────────────────────────────────────────────────────────────
-const STATUS_BADGE: Record<CameraStatus, string> = {
-  active:      'bg-emerald-500/20 text-emerald-400',
-  offline:     'bg-gray-500/20 text-gray-400',
-  maintenance: 'bg-amber-500/20 text-amber-400',
-};
-const STATUS_DOT: Record<CameraStatus, string> = {
-  active:      'bg-emerald-400',
-  offline:     'bg-gray-500',
-  maintenance: 'bg-amber-400',
-};
-const STATUS_LABEL: Record<CameraStatus, string> = {
-  active:      'Активна',
-  offline:     'Офлайн',
-  maintenance: 'Обслуговування',
-};
+const LOCAL_CAMERA_LOCATION = 'Локальна веб-камера';
 
-// ── Form state ────────────────────────────────────────────────────────────────
 interface CamForm {
   name: string;
   location: string;
@@ -62,19 +43,26 @@ interface CamForm {
   recognition_enabled: boolean;
   requires_mfa: boolean;
 }
+
 const EMPTY: CamForm = {
-  name: '', location: '', camera_code: '', stream_url: '0',
-  detection_confidence: '0.55', frame_skip: '2',
-  recognition_enabled: true, requires_mfa: false,
+  name: '',
+  location: '',
+  camera_code: '',
+  stream_url: '0',
+  detection_confidence: '0.55',
+  frame_skip: '2',
+  recognition_enabled: true,
+  requires_mfa: false,
 };
 
-// ── Camera Form Dialog ────────────────────────────────────────────────────────
 function CameraFormDialog({
-  open, mode, initial, editId, onClose, onSaved,
+  open, initial, editId, onClose, onSaved,
 }: {
-  open: boolean; mode: 'create' | 'edit';
-  initial: CamForm; editId: number | null;
-  onClose: () => void; onSaved: () => void;
+  open: boolean;
+  initial: CamForm;
+  editId: number | null;
+  onClose: () => void;
+  onSaved: () => void;
 }) {
   const [form, setForm] = useState<CamForm>(initial);
   const [saving, setSaving] = useState(false);
@@ -84,20 +72,16 @@ function CameraFormDialog({
 
   const handleSubmit = async (e: React.SyntheticEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (!editId) return;
+
     setSaving(true);
     try {
-      const payload = {
+      await updateCamera(editId, {
         ...form,
         detection_confidence: parseFloat(form.detection_confidence),
         frame_skip: parseInt(form.frame_skip),
-      };
-      if (mode === 'create') {
-        await createCamera(payload);
-        toast.success('Камеру додано');
-      } else if (editId) {
-        await updateCamera(editId, payload);
-        toast.success('Камеру оновлено');
-      }
+      });
+      toast.success('Камеру оновлено');
       onSaved();
       onClose();
     } catch {
@@ -111,15 +95,19 @@ function CameraFormDialog({
     <Dialog open={open} onOpenChange={v => { if (!v) onClose(); }}>
       <DialogContent className="bg-[#1a2235] border-white/10 text-white max-w-lg">
         <DialogHeader>
-          <DialogTitle>{mode === 'create' ? '📷 Нова камера' : '📷 Редагувати камеру'}</DialogTitle>
+          <DialogTitle>Редагувати камеру</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div className="grid grid-cols-2 gap-3">
             {([['Назва', 'name'], ['Розташування', 'location']] as [string, keyof CamForm][]).map(([lbl, k]) => (
               <div key={k} className="flex flex-col gap-1.5">
                 <Label className="text-white/60 text-xs">{lbl} *</Label>
-                <Input required value={form[k] as string} onChange={e => set(k, e.target.value)}
-                  className="bg-[#0a0e1a] border-white/10 text-white" />
+                <Input
+                  required
+                  value={form[k] as string}
+                  onChange={e => set(k, e.target.value)}
+                  className="bg-[#0a0e1a] border-white/10 text-white"
+                />
               </div>
             ))}
           </div>
@@ -127,28 +115,47 @@ function CameraFormDialog({
           <div className="grid grid-cols-2 gap-3">
             <div className="flex flex-col gap-1.5">
               <Label className="text-white/60 text-xs">Код камери *</Label>
-              <Input required value={form.camera_code} onChange={e => set('camera_code', e.target.value)}
-                placeholder="CAM-001" className="bg-[#0a0e1a] border-white/10 text-white font-mono" />
+              <Input
+                required
+                value={form.camera_code}
+                onChange={e => set('camera_code', e.target.value)}
+                className="bg-[#0a0e1a] border-white/10 text-white font-mono"
+              />
             </div>
             <div className="flex flex-col gap-1.5">
               <Label className="text-white/60 text-xs">URL потоку *</Label>
-              <Input required value={form.stream_url} onChange={e => set('stream_url', e.target.value)}
-                placeholder="rtsp:// або 0" className="bg-[#0a0e1a] border-white/10 text-white font-mono" />
+              <Input
+                required
+                value={form.stream_url}
+                onChange={e => set('stream_url', e.target.value)}
+                className="bg-[#0a0e1a] border-white/10 text-white font-mono"
+              />
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div className="flex flex-col gap-1.5">
-              <Label className="text-white/60 text-xs">Поріг впевненості (0.1–1.0)</Label>
-              <Input type="number" step="0.05" min="0.1" max="1.0"
-                value={form.detection_confidence} onChange={e => set('detection_confidence', e.target.value)}
-                className="bg-[#0a0e1a] border-white/10 text-white" />
+              <Label className="text-white/60 text-xs">Поріг впевненості</Label>
+              <Input
+                type="number"
+                step="0.05"
+                min="0.1"
+                max="1.0"
+                value={form.detection_confidence}
+                onChange={e => set('detection_confidence', e.target.value)}
+                className="bg-[#0a0e1a] border-white/10 text-white"
+              />
             </div>
             <div className="flex flex-col gap-1.5">
-              <Label className="text-white/60 text-xs">Frame skip (1–10)</Label>
-              <Input type="number" min="1" max="10"
-                value={form.frame_skip} onChange={e => set('frame_skip', e.target.value)}
-                className="bg-[#0a0e1a] border-white/10 text-white" />
+              <Label className="text-white/60 text-xs">Frame skip</Label>
+              <Input
+                type="number"
+                min="1"
+                max="10"
+                value={form.frame_skip}
+                onChange={e => set('frame_skip', e.target.value)}
+                className="bg-[#0a0e1a] border-white/10 text-white"
+              />
             </div>
           </div>
 
@@ -169,7 +176,7 @@ function CameraFormDialog({
                 checked={form.requires_mfa}
                 onCheckedChange={v => set('requires_mfa', v)}
               />
-              <Label htmlFor="mfa" className="text-white/70 text-sm cursor-pointer">Вимагати MFA</Label>
+              <Label htmlFor="mfa" className="text-white/70 text-sm cursor-pointer">MFA</Label>
             </div>
           </div>
 
@@ -177,10 +184,8 @@ function CameraFormDialog({
             <Button type="button" variant="ghost" onClick={onClose} className="text-white/60 hover:text-white">
               Скасувати
             </Button>
-            <Button type="submit" disabled={saving}
-              className="bg-gradient-to-r from-blue-700 to-blue-500 text-white">
-              {saving ? <Loader2 size={14} className="animate-spin" /> : null}
-              {mode === 'create' ? 'Додати' : 'Зберегти'}
+            <Button type="submit" disabled={saving} className="bg-gradient-to-r from-blue-700 to-blue-500 text-white">
+              Зберегти
             </Button>
           </DialogFooter>
         </form>
@@ -189,104 +194,206 @@ function CameraFormDialog({
   );
 }
 
-// ── Snapshot Dialog ───────────────────────────────────────────────────────────
-function SnapshotDialog({ cameraId, cameraName, open, onClose }: {
-  cameraId: number | null; cameraName: string; open: boolean; onClose: () => void;
+function PreviewTile({
+  stream,
+  camera,
+  onRemove,
+  onOpen,
+}: {
+  stream: MediaStream | null;
+  camera: DemoCamera;
+  onRemove: () => void;
+  onOpen: () => void;
 }) {
-  const [src, setSrc] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
-    if (!open || !cameraId) return;
-    setLoading(true);
-    getSnapshot(cameraId)
-      .then(r => {
-        const d = r.data as { snapshot?: string; frame?: string };
-        setSrc(d.snapshot ?? d.frame ?? null);
-      })
-      .catch(() => toast.error('Не вдалося отримати знімок'))
-      .finally(() => setLoading(false));
-  }, [open, cameraId]);
+    const video = videoRef.current;
+    if (!video || !stream) return;
+
+    video.srcObject = stream;
+    video.muted = true;
+    video.playsInline = true;
+    void video.play().catch(() => {});
+  }, [stream]);
 
   return (
-    <Dialog open={open} onOpenChange={v => { if (!v) { onClose(); setSrc(null); } }}>
-      <DialogContent className="bg-[#1a2235] border-white/10 text-white max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>Знімок — {cameraName}</DialogTitle>
-        </DialogHeader>
-        {loading ? (
-          <div className="flex items-center justify-center h-64">
-            <Loader2 size={32} className="animate-spin text-white/30" />
-          </div>
-        ) : src ? (
-          <img src={src} alt="snapshot" className="w-full rounded-lg border border-white/10" />
+    <div className="rounded-2xl border border-white/10 bg-[#1a2235] overflow-hidden">
+      <div className="aspect-video bg-black relative">
+        {stream ? (
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            className="w-full h-full object-cover"
+            style={{ transform: 'scaleX(-1)' }}
+          />
         ) : (
-          <div className="flex flex-col items-center justify-center h-48 text-white/30 gap-2">
-            <Image size={32} />
-            <span className="text-sm">Знімок недоступний</span>
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-white/35">
+            <MonitorX size={28} />
+            <span className="text-sm">Камера не підключена</span>
           </div>
         )}
-        <DialogFooter>
-          <Button variant="ghost" onClick={onClose} className="text-white/60 hover:text-white">Закрити</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        <div className="absolute top-3 left-3">
+          <Badge className={`${stream ? 'bg-emerald-500/80' : 'bg-gray-500/80'} text-white border-0 gap-1`}>
+            {stream ? <Video size={10} /> : <VideoOff size={10} />}
+            {stream ? 'LIVE' : 'OFFLINE'}
+          </Badge>
+        </div>
+      </div>
+        <div className="p-4 flex items-start justify-between gap-3">
+        <button className="text-left flex-1" onClick={onOpen}>
+          <div className="text-white font-medium hover:text-blue-300 transition-colors">{camera.name}</div>
+          <div className="text-xs text-white/45">{camera.location}</div>
+          <div className="text-[11px] text-blue-300/70 mt-1">Дубль локальної веб-камери</div>
+        </button>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onRemove}
+          className="text-white/50 hover:text-red-300 hover:bg-red-500/10"
+        >
+          Прибрати
+        </Button>
+      </div>
+    </div>
   );
 }
 
-// ── Main Page ────────────────────────────────────────────────────────────────
 export default function Cameras() {
+  const navigate = useNavigate();
   const [cameras, setCameras] = useState<Camera[]>([]);
   const [loading, setLoading] = useState(true);
+  const [localPreviews, setLocalPreviews] = useState<DemoCamera[]>([]);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
 
-  const [formModal, setFormModal] = useState<{ open: boolean; mode: 'create' | 'edit'; initial: CamForm; editId: number | null }>({
-    open: false, mode: 'create', initial: EMPTY, editId: null,
+  const [formModal, setFormModal] = useState<{ open: boolean; initial: CamForm; editId: number | null }>({
+    open: false, initial: EMPTY, editId: null,
   });
-  const [snapshotTarget, setSnapshotTarget] = useState<Camera | null>(null);
-  const [deleteTarget, setDeleteTarget]   = useState<Camera | null>(null);
-  const [zoneTarget, setZoneTarget]       = useState<Camera | null>(null);
-  const [testing, setTesting] = useState<number | null>(null);
-  const [toggling, setToggling] = useState<number | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Camera | null>(null);
+
+  const syncPreviewMetadata = (nextCameras: Camera[]) => {
+    setLocalPreviews(prev => prev.map(preview => {
+      const matched = nextCameras.find(camera => camera.id === preview.id);
+      if (!matched) return preview;
+      return {
+        ...preview,
+        name: matched.name,
+        location: matched.location,
+      };
+    }));
+  };
 
   const load = () => {
     setLoading(true);
     getCameras()
-      .then(r => setCameras((r.data as { results?: Camera[] }).results ?? (r.data as Camera[])))
+      .then(r => {
+        const nextCameras = (r.data as { results?: Camera[] }).results ?? (r.data as Camera[]);
+        setCameras(nextCameras);
+        syncPreviewMetadata(nextCameras);
+      })
       .catch(() => {})
       .finally(() => setLoading(false));
   };
 
   useEffect(() => { load(); }, []);
 
-  const handleTest = async (cam: Camera) => {
-    setTesting(cam.id);
+  useEffect(() => {
+    setLocalPreviews(loadDemoCameras());
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      localStream?.getTracks().forEach(track => track.stop());
+    };
+  }, [localStream]);
+
+  useEffect(() => {
+    saveDemoCameras(localPreviews);
+  }, [localPreviews]);
+
+  useEffect(() => {
+    if (localPreviews.length === 0 || localStream) {
+      return;
+    }
+
+    void ensureLocalStream();
+  }, [localPreviews, localStream]);
+
+  const ensureLocalStream = async () => {
+    if (localStream) return localStream;
+
     try {
-      const r = await testCamera(cam.id);
-      const d = r.data as { connected?: boolean };
-      if (d.connected) toast.success(`«${cam.name}» — підключення успішне`);
-      else toast.error(`«${cam.name}» — камера недоступна`);
-    } catch {
-      toast.error('Помилка перевірки');
-    } finally {
-      setTesting(null);
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          facingMode: 'user',
+        },
+        audio: false,
+      });
+      setLocalStream(stream);
+      setCameraError(null);
+      return stream;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Невідома помилка';
+      setCameraError(msg);
+      toast.error(`Не вдалося відкрити веб-камеру: ${msg}`);
+      return null;
     }
   };
 
-  const handleToggle = async (cam: Camera) => {
-    setToggling(cam.id);
+  const handleAddPreview = async () => {
+    const stream = await ensureLocalStream();
+    if (!stream) return;
+
+    const cameraNumber = cameras.length + 1;
+    const cameraCode = `LOCAL-${Date.now()}`;
+
     try {
-      if (cam.status === 'active') {
-        await stopCamera(cam.id);
-        toast.info(`«${cam.name}» зупинено`);
-      } else {
-        await startCamera(cam.id);
-        toast.success(`«${cam.name}» запущено`);
-      }
-      setTimeout(load, 1200);
+      const response = await createCamera({
+        name: `Камера ${cameraNumber}`,
+        location: LOCAL_CAMERA_LOCATION,
+        camera_code: cameraCode,
+        stream_url: '0',
+        is_local: true,
+        recognition_enabled: true,
+        detection_confidence: 0.55,
+        frame_skip: 2,
+        resolution_scale: 0.25,
+        requires_mfa: false,
+      });
+      const createdCamera = response.data as Camera;
+
+      setCameras(prev => [...prev, createdCamera]);
+      setLocalPreviews(prev => [
+        ...prev,
+        {
+          id: createdCamera.id,
+          name: createdCamera.name,
+          location: createdCamera.location,
+        },
+      ]);
+      toast.success('Камеру створено у плитках і в таблиці');
     } catch {
-      toast.error('Помилка зміни статусу');
-    } finally {
-      setToggling(null);
+      toast.error('Не вдалося створити камеру');
+    }
+  };
+
+  const handleRemovePreview = async (id: number) => {
+    const target = cameras.find(camera => camera.id === id);
+
+    try {
+      if (target) {
+        await deleteCamera(target.id);
+      }
+      setLocalPreviews(prev => prev.filter(item => item.id !== id));
+      setCameras(prev => prev.filter(camera => camera.id !== id));
+      toast.success(target ? `«${target.name}» видалено` : 'Плитку камери прибрано');
+    } catch {
+      toast.error('Помилка видалення камери');
     }
   };
 
@@ -294,8 +401,9 @@ export default function Cameras() {
     if (!deleteTarget) return;
     try {
       await deleteCamera(deleteTarget.id);
+      setCameras(prev => prev.filter(camera => camera.id !== deleteTarget.id));
+      setLocalPreviews(prev => prev.filter(camera => camera.id !== deleteTarget.id));
       toast.success(`«${deleteTarget.name}» видалено`);
-      load();
     } catch {
       toast.error('Помилка видалення');
     } finally {
@@ -305,9 +413,12 @@ export default function Cameras() {
 
   const openEdit = (cam: Camera) => {
     setFormModal({
-      open: true, mode: 'edit', editId: cam.id,
+      open: true,
+      editId: cam.id,
       initial: {
-        name: cam.name, location: cam.location, camera_code: cam.camera_code,
+        name: cam.name,
+        location: cam.location,
+        camera_code: cam.camera_code,
         stream_url: cam.stream_url,
         detection_confidence: String(cam.detection_confidence),
         frame_skip: String(cam.frame_skip),
@@ -322,19 +433,53 @@ export default function Cameras() {
       <div className="page-header">
         <div>
           <h1>Камери</h1>
-          <div className="page-subtitle">Управління камерами спостереження</div>
+          <div className="page-subtitle">Візуальні дублікати вашої локальної камери без реального підключення нових пристроїв</div>
         </div>
         <div className="flex gap-2">
           <Button variant="ghost" size="sm" onClick={load} className="text-white/60 hover:text-white border border-white/10">
             <RefreshCw size={14} />
           </Button>
-          <Button
-            className="bg-gradient-to-r from-blue-700 to-blue-500 text-white"
-            onClick={() => setFormModal({ open: true, mode: 'create', initial: EMPTY, editId: null })}
-          >
+          <Button className="bg-gradient-to-r from-blue-700 to-blue-500 text-white" onClick={handleAddPreview}>
             <Plus size={15} />
             Додати камеру
           </Button>
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-white/10 bg-[#111827] p-4 mb-6">
+        <div className="flex flex-wrap items-center gap-3 justify-between">
+          <div>
+            <div className="text-white font-medium">Покази локальної камери</div>
+            <div className="text-sm text-white/45">Кожне натискання на кнопку створює і плитку зверху, і запис камери в таблиці нижче.</div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Badge className={`${localStream ? 'bg-emerald-500/20 text-emerald-400' : 'bg-gray-500/20 text-gray-400'} border-0`}>
+              {localStream ? <Video size={12} /> : <VideoOff size={12} />}
+              {localStream ? 'Камера активна' : 'Камера не активна'}
+            </Badge>
+            <Badge className="bg-blue-500/15 text-blue-300 border-0 gap-1">
+              <Copy size={11} />
+              {localPreviews.length} показів
+            </Badge>
+          </div>
+        </div>
+
+        {cameraError && (
+          <div className="mt-4 rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+            Не вдалося отримати доступ до веб-камери: {cameraError}
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 mt-4">
+          {localPreviews.map(item => (
+            <PreviewTile
+              key={item.id}
+              stream={localStream}
+              camera={item}
+              onRemove={() => { void handleRemovePreview(item.id); }}
+              onOpen={() => navigate(`/cameras/${item.id}`)}
+            />
+          ))}
         </div>
       </div>
 
@@ -347,7 +492,7 @@ export default function Cameras() {
           <Table>
             <TableHeader>
               <TableRow className="border-white/10 hover:bg-transparent">
-                {['Камера', 'Розташування', 'URL потоку', 'Статус', 'Поріг', 'Розпізн.', 'Дії'].map(h => (
+                {['Камера', 'Розташування', 'URL потоку', 'Поріг', 'Розпізн.', 'Дії'].map(h => (
                   <TableHead key={h} className="text-white/40 text-[11px] uppercase tracking-wider">{h}</TableHead>
                 ))}
               </TableRow>
@@ -355,7 +500,7 @@ export default function Cameras() {
             <TableBody>
               {cameras.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center py-16 text-white/30">Камери не знайдено</TableCell>
+                  <TableCell colSpan={6} className="text-center py-16 text-white/30">Реальних камер у базі немає</TableCell>
                 </TableRow>
               ) : cameras.map(cam => (
                 <TableRow key={cam.id} className="border-white/10 hover:bg-white/5">
@@ -372,24 +517,6 @@ export default function Cameras() {
                   </TableCell>
                   <TableCell className="text-white/60">{cam.location}</TableCell>
                   <TableCell className="font-mono text-blue-400 text-xs">{cam.stream_url}</TableCell>
-                  <TableCell>
-                    <div className="flex flex-col gap-0.5">
-                      <Badge className={`border-0 gap-1.5 w-fit ${STATUS_BADGE[cam.status] ?? 'bg-gray-500/20 text-gray-400'}`}>
-                        <span className={`w-1.5 h-1.5 rounded-full ${STATUS_DOT[cam.status] ?? 'bg-gray-500'}`} />
-                        {STATUS_LABEL[cam.status] ?? cam.status}
-                      </Badge>
-                      {cam.last_ping && (
-                        <span className="text-[10px] text-white/30">
-                          {(() => {
-                            const diff = Math.floor((Date.now() - new Date(cam.last_ping).getTime()) / 1000);
-                            if (diff < 60) return `${diff}с тому`;
-                            if (diff < 3600) return `${Math.floor(diff / 60)}хв тому`;
-                            return `${Math.floor(diff / 3600)}год тому`;
-                          })()}
-                        </span>
-                      )}
-                    </div>
-                  </TableCell>
                   <TableCell className="text-white/60 font-mono text-xs">{cam.detection_confidence}</TableCell>
                   <TableCell>
                     <Badge className={`border-0 ${cam.recognition_enabled ? 'bg-emerald-500/20 text-emerald-400' : 'bg-gray-500/20 text-gray-400'}`}>
@@ -398,49 +525,6 @@ export default function Cameras() {
                   </TableCell>
                   <TableCell>
                     <div className="flex gap-1.5">
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button variant="ghost" size="icon-xs" onClick={() => setSnapshotTarget(cam)}>
-                            <Image size={13} />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>Знімок</TooltipContent>
-                      </Tooltip>
-
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button variant="ghost" size="icon-xs" onClick={() => setZoneTarget(cam)}>
-                            <ScanLine size={13} />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>Зони камери</TooltipContent>
-                      </Tooltip>
-
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button variant="ghost" size="icon-xs" onClick={() => handleTest(cam)} disabled={testing === cam.id}>
-                            {testing === cam.id ? <Loader2 size={13} className="animate-spin" /> : <Wifi size={13} />}
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>Тест зв'язку</TooltipContent>
-                      </Tooltip>
-
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            variant="ghost" size="icon-xs"
-                            className={cam.status === 'active' ? 'text-amber-400 hover:text-amber-300 hover:bg-amber-500/10' : 'text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10'}
-                            onClick={() => handleToggle(cam)}
-                            disabled={toggling === cam.id}
-                          >
-                            {toggling === cam.id
-                              ? <Loader2 size={13} className="animate-spin" />
-                              : cam.status === 'active' ? <Square size={13} /> : <Play size={13} />}
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>{cam.status === 'active' ? 'Зупинити' : 'Запустити'}</TooltipContent>
-                      </Tooltip>
-
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <Button variant="ghost" size="icon-xs" onClick={() => openEdit(cam)}>
@@ -453,7 +537,8 @@ export default function Cameras() {
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <Button
-                            variant="ghost" size="icon-xs"
+                            variant="ghost"
+                            size="icon-xs"
                             className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
                             onClick={() => setDeleteTarget(cam)}
                           >
@@ -471,39 +556,20 @@ export default function Cameras() {
         </div>
       )}
 
-      {/* Form Dialog */}
       <CameraFormDialog
         open={formModal.open}
-        mode={formModal.mode}
         initial={formModal.initial}
         editId={formModal.editId}
         onClose={() => setFormModal(s => ({ ...s, open: false }))}
         onSaved={load}
       />
 
-      {/* Snapshot Dialog */}
-      <SnapshotDialog
-        open={!!snapshotTarget}
-        cameraId={snapshotTarget?.id ?? null}
-        cameraName={snapshotTarget?.name ?? ''}
-        onClose={() => setSnapshotTarget(null)}
-      />
-
-      {/* Zone Editor Dialog */}
-      <ZoneEditorDialog
-        open={!!zoneTarget}
-        cameraId={zoneTarget?.id ?? null}
-        cameraName={zoneTarget?.name ?? ''}
-        onClose={() => setZoneTarget(null)}
-      />
-
-      {/* Delete Confirm */}
       <AlertDialog open={!!deleteTarget} onOpenChange={v => { if (!v) setDeleteTarget(null); }}>
         <AlertDialogContent className="bg-[#1a2235] border-white/10 text-white">
           <AlertDialogHeader>
             <AlertDialogTitle>Видалити камеру?</AlertDialogTitle>
             <AlertDialogDescription className="text-white/50">
-              «{deleteTarget?.name}» буде видалено разом з усіма налаштуваннями.
+              «{deleteTarget?.name}» буде видалено з бази.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

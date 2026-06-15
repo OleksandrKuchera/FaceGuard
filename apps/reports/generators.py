@@ -7,6 +7,9 @@ import logging
 from datetime import date, timedelta
 
 from django.utils import timezone
+from django.db.models import Count
+
+from apps.events.analytics import event_type_label, get_or_build_daily_stats
 
 logger = logging.getLogger(__name__)
 
@@ -393,16 +396,15 @@ class SecurityAuditReportGenerator:
 
 class DailySummaryReportGenerator:
     def generate(self, fmt: str, params: dict) -> tuple[bytes, str]:
-        from apps.events.models import RecognitionEvent, DailyStats
+        from apps.events.models import RecognitionEvent
 
         target_date_str = params.get("date_from", str(timezone.now().date()))
         target_date = date.fromisoformat(target_date_str)
 
-        # Last 7 days
-        week_stats = DailyStats.objects.filter(
-            date__gte=target_date - timedelta(days=6),
-            date__lte=target_date,
-        ).order_by("date")
+        week_stats = [
+            get_or_build_daily_stats(target_date - timedelta(days=offset))
+            for offset in range(6, -1, -1)
+        ]
 
         # Today's events summary
         events = RecognitionEvent.objects.filter(
@@ -423,30 +425,27 @@ class DailySummaryReportGenerator:
         writer.writerow(["Дата", "Всього", "Розпізнано", "Невідомі", "Spoofing", "Унікальних осіб"])
         for s in week_stats:
             writer.writerow([
-                str(s.date), s.total_events, s.recognized,
-                s.unknown, s.spoofing_attempts, s.unique_persons,
+                str(s["date"]), s["total_events"], s["recognized"],
+                s["unknown"], s["spoofing_attempts"], s["unique_persons"],
             ])
 
         writer.writerow([])
         writer.writerow([f"=== АКТИВНІСТЬ ПО КАМЕРАХ ({target_date}) ==="])
         writer.writerow(["Камера", "Тип події", "Кількість"])
 
-        from django.db.models import Count
         camera_summary = (
             events.values("camera__name", "event_type")
             .annotate(count=Count("id"))
             .order_by("camera__name", "event_type")
         )
         for row in camera_summary:
-            writer.writerow([row["camera__name"], row["event_type"], row["count"]])
+            writer.writerow([row["camera__name"], event_type_label(row["event_type"]), row["count"]])
 
         return buf.getvalue().encode("utf-8-sig")
 
     def _xlsx(self, week_stats, events, target_date: str) -> bytes:
         from openpyxl import Workbook
         from openpyxl.styles import Font, PatternFill
-        from django.db.models import Count
-
         wb = Workbook()
 
         ws1 = wb.active
@@ -458,7 +457,7 @@ class DailySummaryReportGenerator:
             cell.fill = fill
             cell.font = font
         for s in week_stats:
-            ws1.append([str(s.date), s.total_events, s.recognized, s.unknown, s.spoofing_attempts, s.unique_persons])
+            ws1.append([str(s["date"]), s["total_events"], s["recognized"], s["unknown"], s["spoofing_attempts"], s["unique_persons"]])
 
         ws2 = wb.create_sheet("Камери")
         ws2.append(["Камера", "Тип події", "Кількість"])
@@ -472,7 +471,7 @@ class DailySummaryReportGenerator:
             .order_by("camera__name", "event_type")
         )
         for row in camera_summary:
-            ws2.append([row["camera__name"], row["event_type"], row["count"]])
+            ws2.append([row["camera__name"], event_type_label(row["event_type"]), row["count"]])
 
         buf = io.BytesIO()
         wb.save(buf)
@@ -481,8 +480,6 @@ class DailySummaryReportGenerator:
     def _pdf(self, week_stats, events, target_date: str) -> bytes:
         from reportlab.platypus import Table, Paragraph, Spacer
         from reportlab.lib.styles import getSampleStyleSheet
-        from django.db.models import Count
-
         buf = io.BytesIO()
         doc = _build_doc(buf, f"Денний підсумок {target_date}")
         styles = getSampleStyleSheet()
@@ -496,8 +493,8 @@ class DailySummaryReportGenerator:
         data = [["Дата", "Всього", "Розпізнано", "Невідомі", "Spoofing", "Унік."]]
         for s in week_stats:
             data.append([
-                str(s.date), str(s.total_events), str(s.recognized),
-                str(s.unknown), str(s.spoofing_attempts), str(s.unique_persons),
+                str(s["date"]), str(s["total_events"]), str(s["recognized"]),
+                str(s["unknown"]), str(s["spoofing_attempts"]), str(s["unique_persons"]),
             ])
         table = Table(data, repeatRows=1, hAlign="LEFT")
         table.setStyle(_header_table_style())
@@ -514,7 +511,7 @@ class DailySummaryReportGenerator:
         )
         cam_data = [["Камера", "Тип події", "Кількість"]]
         for row in camera_summary:
-            cam_data.append([row["camera__name"], row["event_type"], str(row["count"])])
+            cam_data.append([row["camera__name"], event_type_label(row["event_type"]), str(row["count"])])
 
         cam_table = Table(cam_data, repeatRows=1, hAlign="LEFT")
         cam_table.setStyle(_header_table_style())
@@ -556,8 +553,8 @@ class CustomReportGenerator:
         writer.writerow(["Тип", "Особа", "ID особи", "Камера", "Впевненість", "Liveness", "Тривога", "Час"])
         for e in events:
             writer.writerow([
-                e.event_type,
-                e.person.full_name if e.person else "",
+                e.get_event_type_display(),
+                e.person.full_name if e.person else "Невідома особа",
                 e.person.person_id if e.person else "",
                 e.camera.name,
                 round(e.confidence or 0, 1),
@@ -583,8 +580,8 @@ class CustomReportGenerator:
 
         for e in events:
             ws.append([
-                e.event_type,
-                e.person.full_name if e.person else "",
+                e.get_event_type_display(),
+                e.person.full_name if e.person else "Невідома особа",
                 e.person.person_id if e.person else "",
                 e.camera.name,
                 round(e.confidence or 0, 1),
@@ -612,8 +609,8 @@ class CustomReportGenerator:
         data = [["Тип", "Особа", "Камера", "Впевн.", "Тривога", "Час"]]
         for e in events:
             data.append([
-                e.event_type,
-                e.person.full_name if e.person else "–",
+                e.get_event_type_display(),
+                e.person.full_name if e.person else "Невідома особа",
                 e.camera.name,
                 f"{round(e.confidence or 0, 1)}%",
                 "Так" if e.is_alert else "Ні",

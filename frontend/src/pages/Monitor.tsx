@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import Layout from '@/components/Layout';
-import { getCameras } from '@/api/client';
+import { getCameras, getValidAccessToken, refreshAccessToken } from '@/api/client';
 import type { Camera, WsMessage, WsFace } from '@/types';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -26,15 +26,36 @@ function CameraStream({ camera }: { camera: Camera }) {
   const [reconnecting, setReconnecting] = useState(false);
   const addAlert = useAlertStore(s => s.addAlert);
 
-  const connect = () => {
-    const token = localStorage.getItem('access_token');
+  const connect = async () => {
+    const token = await getValidAccessToken();
+    if (!token) {
+      toast.error('Сесія авторизації недійсна. Увійдіть повторно.');
+      window.location.href = '/login';
+      return;
+    }
+
     const ws = new WebSocket(`${WS_BASE}/ws/camera/${camera.id}/?token=${token}`);
     wsRef.current = ws;
 
     ws.onopen = () => { setConnected(true); setReconnecting(false); };
-    ws.onclose = () => {
+    ws.onclose = async (event) => {
       setConnected(false);
       setFps(0);
+
+      if (event.code === 4001) {
+        const refreshedToken = await refreshAccessToken();
+        if (refreshedToken) {
+          const retryWs = new WebSocket(`${WS_BASE}/ws/camera/${camera.id}/?token=${refreshedToken}`);
+          wsRef.current = retryWs;
+          retryWs.onopen = ws.onopen;
+          retryWs.onclose = ws.onclose;
+          retryWs.onmessage = ws.onmessage;
+          return;
+        }
+
+        toast.error(`Сесію для "${camera.name}" завершено. Потрібен повторний вхід.`);
+        window.location.href = '/login';
+      }
     };
 
     ws.onmessage = (e) => {
@@ -55,6 +76,7 @@ function CameraStream({ camera }: { camera: Camera }) {
             const { top, right, bottom, left } = face.bbox;
             const color = face.is_warming_up
               ? '#6b7280'
+              : face.is_in_cooldown ? '#38bdf8'
               : face.is_spoofing ? '#ef4444'
               : face.is_known ? '#10b981'
               : '#f59e0b';
@@ -63,9 +85,13 @@ function CameraStream({ camera }: { camera: Camera }) {
             ctx.strokeRect(left, top, right - left, bottom - top);
             ctx.fillStyle = color;
             ctx.font = 'bold 13px Inter, sans-serif';
-            let label = face.is_warming_up ? '⏳ Warming up...' : (face.person_name ?? 'Unknown');
+            let label = face.is_warming_up
+              ? '⏳ Warming up...'
+              : face.is_in_cooldown
+                ? '⏸ Cooldown'
+                : (face.person_name ?? 'Unknown');
             if (face.track_id != null) label += ` #${face.track_id}`;
-            if (!face.is_warming_up && face.confidence != null) label += ` ${face.confidence.toFixed(0)}%`;
+            if (!face.is_warming_up && !face.is_in_cooldown && face.confidence != null) label += ` ${face.confidence.toFixed(0)}%`;
             if (face.is_spoofing) {
               const reason = face.texture_is_spoof
                 ? `texture tx:${face.texture_score.toFixed(2)}`
@@ -73,6 +99,8 @@ function CameraStream({ camera }: { camera: Camera }) {
                   ? 'liveness'
                   : `combined tx:${face.texture_score.toFixed(2)}`;
               label = `⚠ SPOOF (${reason})`;
+            } else if (face.liveness_state === 'INSUFFICIENT_DATA') {
+              label = '… Insufficient data';
             }
             ctx.fillText(label, left, top > 20 ? top - 6 : top + 18);
           });
@@ -110,14 +138,14 @@ function CameraStream({ camera }: { camera: Camera }) {
   };
 
   useEffect(() => {
-    connect();
+    void connect();
     return () => { wsRef.current?.close(); };
   }, [camera.id]);
 
   const handleReconnect = () => {
     wsRef.current?.close();
     setReconnecting(true);
-    setTimeout(() => { connect(); }, 500);
+    setTimeout(() => { void connect(); }, 500);
   };
 
   return (

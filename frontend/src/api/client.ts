@@ -1,15 +1,65 @@
 import axios from 'axios';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api/v1';
+const ACCESS_TOKEN_KEY = 'access_token';
+const REFRESH_TOKEN_KEY = 'refresh_token';
+const USER_KEY = 'fg_user';
 
 const client = axios.create({
     baseURL: API_BASE,
     headers: { 'Content-Type': 'application/json' },
 });
 
+function parseJwtExp(token: string): number | null {
+    try {
+        const payload = JSON.parse(atob(token.split('.')[1])) as { exp?: number };
+        return typeof payload.exp === 'number' ? payload.exp : null;
+    } catch {
+        return null;
+    }
+}
+
+function clearStoredAuth() {
+    localStorage.removeItem(ACCESS_TOKEN_KEY);
+    localStorage.removeItem(REFRESH_TOKEN_KEY);
+    localStorage.removeItem(USER_KEY);
+}
+
+export async function refreshAccessToken(): Promise<string | null> {
+    const refresh = localStorage.getItem(REFRESH_TOKEN_KEY);
+    if (!refresh) return null;
+
+    try {
+        const { data } = await axios.post<{ access: string }>(
+            `${API_BASE}/auth/token/refresh/`,
+            { refresh },
+        );
+        localStorage.setItem(ACCESS_TOKEN_KEY, data.access);
+        return data.access;
+    } catch {
+        clearStoredAuth();
+        return null;
+    }
+}
+
+export async function getValidAccessToken(skewSeconds = 30): Promise<string | null> {
+    const token = localStorage.getItem(ACCESS_TOKEN_KEY);
+    if (!token) return refreshAccessToken();
+
+    const exp = parseJwtExp(token);
+    if (exp === null) return refreshAccessToken();
+
+    const now = Math.floor(Date.now() / 1000);
+    if (exp - now <= skewSeconds) {
+        return refreshAccessToken();
+    }
+
+    return token;
+}
+
 // Attach access token to every request
 client.interceptors.request.use((config) => {
-    const token = localStorage.getItem('access_token');
+    const token = localStorage.getItem(ACCESS_TOKEN_KEY);
     if (token) config.headers.Authorization = `Bearer ${token}`;
     return config;
 });
@@ -22,17 +72,14 @@ client.interceptors.response.use(
         if (err.response?.status === 401 && !original._retry) {
             original._retry = true;
             try {
-                const refresh = localStorage.getItem('refresh_token');
-                const { data } = await axios.post<{ access: string }>(
-                    `${API_BASE}/auth/token/refresh/`, { refresh }
-                );
-                localStorage.setItem('access_token', data.access);
-                original.headers.Authorization = `Bearer ${data.access}`;
+                const access = await refreshAccessToken();
+                if (!access) {
+                    throw new Error('refresh_failed');
+                }
+                original.headers.Authorization = `Bearer ${access}`;
                 return client(original);
             } catch {
-                localStorage.removeItem('access_token');
-                localStorage.removeItem('refresh_token');
-                localStorage.removeItem('fg_user');
+                clearStoredAuth();
                 window.location.href = '/login';
             }
         }

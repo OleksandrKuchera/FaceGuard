@@ -54,6 +54,7 @@ export default function PersonDetail() {
   const [person, setPerson] = useState<Person | null>(null);
   const [photos, setPhotos] = useState<PersonPhoto[]>([]);
   const [events, setEvents] = useState<RecognitionEvent[]>([]);
+  const [chartEvents, setChartEvents] = useState<RecognitionEvent[]>([]);
   const [trainStatus, setTrainStatus] = useState<TrainStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [deletingPhoto, setDeletingPhoto] = useState<number | null>(null);
@@ -62,20 +63,51 @@ export default function PersonDetail() {
   const [confirmDeactivate, setConfirmDeactivate] = useState(false);
   const pollRef = { current: null as ReturnType<typeof setInterval> | null };
 
+  const fetchChartEvents = async (targetPersonId: number) => {
+    const since = new Date();
+    since.setDate(since.getDate() - 13);
+    const dateFrom = since.toISOString().slice(0, 10);
+
+    const allEvents: RecognitionEvent[] = [];
+    let page = 1;
+    let total = 0;
+
+    do {
+      const response = await getEvents({
+        person: String(targetPersonId),
+        date_from: dateFrom,
+        page: String(page),
+      });
+      const payload = response.data as {
+        count?: number;
+        results?: RecognitionEvent[];
+      } | RecognitionEvent[];
+      const batch = Array.isArray(payload) ? payload : (payload.results ?? []);
+      total = Array.isArray(payload) ? batch.length : (payload.count ?? batch.length);
+      allEvents.push(...batch);
+      page += 1;
+      if (Array.isArray(payload)) break;
+    } while (allEvents.length < total);
+
+    return allEvents;
+  };
+
   const load = async () => {
     setLoading(true);
     try {
-      const [personRes, photosRes, eventsRes, trainRes] = await Promise.all([
+      const [personRes, photosRes, eventsRes, trainRes, chartEventsRes] = await Promise.all([
         getPerson(personId),
         getPhotos(personId),
         getEvents({ person: String(personId), page: '1' }),
         getTrainStatus(personId),
+        fetchChartEvents(personId),
       ]);
       setPerson(personRes.data as Person);
       setPhotos(photosRes.data as PersonPhoto[]);
       const ed = eventsRes.data as { results?: RecognitionEvent[] };
       setEvents(ed.results ?? (eventsRes.data as RecognitionEvent[]));
       setTrainStatus(trainRes.data as TrainStatus);
+      setChartEvents(chartEventsRes);
     } catch {
       toast.error('Помилка завантаження даних');
     } finally {
@@ -181,7 +213,7 @@ export default function PersonDetail() {
       d.setDate(d.getDate() - i);
       days[d.toISOString().slice(0, 10)] = 0;
     }
-    events
+    chartEvents
       .filter(ev => ev.event_type === 'recognized')
       .forEach(ev => {
         const day = ev.timestamp.slice(0, 10);

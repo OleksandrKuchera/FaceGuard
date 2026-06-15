@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 from asgiref.sync import sync_to_async
 from django.core.cache import cache
+from django.conf import settings as django_settings
 from django.utils import timezone
 
 from apps.cameras.models import Camera
@@ -146,11 +147,75 @@ class CameraWorker:
                     "is_spoofing": face.is_spoofing,
                     "liveness_score": round(face.liveness_score, 2),
                     "is_warming_up": face.is_warming_up,
+                    "is_in_cooldown": face.is_in_cooldown,
+                    "liveness_state": face.liveness_state,
+                    "liveness_reason": face.liveness_reason,
+                    "final_status": face.liveness_state,
+                    "final_reason_code": getattr(face, "final_reason_code", ""),
+                    "final_module_name": getattr(face, "final_module_name", ""),
                     "texture_score": round(face.texture_score, 3),
                     "track_id": face.track_id,
+                    "debug_enabled": bool(django_settings.LIVENESS_DEBUG_OVERLAY),
+                    "debug": face.debug if django_settings.LIVENESS_DEBUG_OVERLAY else None,
                 }
                 for face in result.faces
             ]
+            for face_data, face in zip(faces_data, result.faces):
+                if not face.debug:
+                    face_data.update({
+                        "debug_hint": "diagnostic_payload_not_provided",
+                    })
+                    continue
+
+                checks = (face.debug or {}).get("checks", {})
+                blink = checks.get("blink_liveness", {})
+                texture = checks.get("texture_combined", {})
+                face_quality = checks.get("face_quality", {})
+                face_data.update({
+                    "blink_count": (face.debug or {}).get("blink_count"),
+                    "min_blinks_required": blink.get("min_required"),
+                    "blink_liveness_status": blink.get("status"),
+                    "eye_state": (face.debug or {}).get("eyes_state"),
+                    "current_ear_left": (face.debug or {}).get("ear_left"),
+                    "current_ear_right": (face.debug or {}).get("ear_right"),
+                    "current_ear_avg": (face.debug or {}).get("ear_avg"),
+                    "smoothed_ear": (face.debug or {}).get("ear_smoothed"),
+                    "open_eye_baseline": (face.debug or {}).get("open_eye_baseline"),
+                    "drop_ratio": blink.get("drop_ratio"),
+                    "recovery_ratio": blink.get("recovery_ratio"),
+                    "blink_down_threshold": (face.debug or {}).get("blink_down_threshold"),
+                    "blink_recovery_threshold": (face.debug or {}).get("blink_recovery_threshold"),
+                    "baseline_buffer_size": (face.debug or {}).get("baseline_buffer_size"),
+                    "baseline_required_frames": (face.debug or {}).get("baseline_required_frames"),
+                    "baseline_ready": (face.debug or {}).get("baseline_ready"),
+                    "baseline_state": (face.debug or {}).get("baseline_state"),
+                    "frames_closed_count": (face.debug or {}).get("frames_closed_count"),
+                    "frames_open_count": (face.debug or {}).get("frames_open_count"),
+                    "valid_ear_frames_count": (face.debug or {}).get("valid_eye_frames"),
+                    "missing_landmarks_count": (face.debug or {}).get("missing_landmarks_count"),
+                    "previous_eye_state": (face.debug or {}).get("previous_eyes_state"),
+                    "blink_internal_state": (face.debug or {}).get("blink_internal_state"),
+                    "blink_event_detected_this_frame": (face.debug or {}).get("blink_event_detected_this_frame"),
+                    "blink_event_history": blink.get("blink_event_history"),
+                    "last_blink_event_time": blink.get("last_blink_event_time"),
+                    "min_ear_seen_during_warmup": (face.debug or {}).get("min_ear_seen_during_warmup"),
+                    "max_ear_seen_during_warmup": (face.debug or {}).get("max_ear_seen_during_warmup"),
+                    "blink_reason_code": blink.get("reason_code") or (face.debug or {}).get("reason_code"),
+                    "warmup_elapsed_seconds": (face.debug or {}).get("warmup_elapsed"),
+                    "warmup_remaining_seconds": (face.debug or {}).get("warmup_remaining"),
+                    "cooldown_remaining_seconds": (face.debug or {}).get("cooldown_remaining"),
+                    "texture_combined_status": texture.get("status"),
+                    "texture_lbp_status": checks.get("texture_lbp", {}).get("status"),
+                    "texture_sobel_status": checks.get("texture_sobel", {}).get("status"),
+                    "texture_fft_status": checks.get("texture_fft", {}).get("status"),
+                    "face_quality_status": face_quality.get("status"),
+                    "blink_detector_called": (face.debug or {}).get("blink_detector_called"),
+                    "landmarks_found": (face.debug or {}).get("landmarks_found"),
+                    "debug_hint": None if django_settings.LIVENESS_DEBUG_OVERLAY else "Set LIVENESS_DEBUG_OVERLAY=True for raw debug object and structured logs",
+                })
+            if django_settings.LIVENESS_DEBUG_OVERLAY:
+                for face_data, face in zip(faces_data, result.faces):
+                    face_data["debug"] = face.debug
 
             await channel_layer.group_send(
                 f"camera_{self.camera.id}",

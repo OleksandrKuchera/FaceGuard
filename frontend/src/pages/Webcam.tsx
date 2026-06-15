@@ -4,35 +4,85 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { getValidAccessToken, refreshAccessToken } from '@/api/client';
 import { toast } from 'sonner';
+import { Link, Navigate, useParams } from 'react-router-dom';
+import type { WsFace } from '@/types';
 import {
   Video, VideoOff, Camera as CameraIcon,
   Wifi, WifiOff, AlertTriangle,
-  Settings2,
+  Settings2, ArrowLeft,
 } from 'lucide-react';
+import { getDemoCameraById } from '@/utils/demoCameras';
 
 const WS_BASE = import.meta.env.VITE_WS_URL || `ws://${window.location.host}`;
 
-interface WsFace {
-  bbox: { top: number; right: number; bottom: number; left: number };
-  person_id: number | null;
-  person_name: string | null;
-  confidence: number | null;
-  distance: number | null;
-  is_known: boolean;
-  is_spoofing: boolean;
-  is_warming_up: boolean;
-  liveness_score: number;
-  texture_score: number;
-  texture_is_spoof?: boolean;
-  liveness_is_spoofing?: boolean;
-  track_id?: number | null;
-  landmarks: Record<string, [number, number][]>;
-}
-
 interface FaceEvent {
+  key: string;
   ts: string;
   faces: WsFace[];
+  count: number;
+}
+
+const EVENT_LOG_COOLDOWN_MS = 5000;
+
+function fmt(value: number | null | undefined, digits = 3) {
+  if (typeof value === 'number') return value.toFixed(digits);
+  if (value === null) return 'not_available';
+  return 'not_provided';
+}
+
+function fmtText(value: string | null | undefined) {
+  if (typeof value === 'string' && value.length > 0) return value;
+  if (value === null) return 'not_available';
+  return 'not_provided';
+}
+
+function fmtBool(value: boolean | null | undefined) {
+  if (value === true) return 'true';
+  if (value === false) return 'false';
+  if (value === null) return 'not_available';
+  return 'not_provided';
+}
+
+function debugLines(face: WsFace) {
+  const baseline = face.open_eye_baseline != null
+    ? fmt(face.open_eye_baseline)
+    : face.baseline_required_frames != null
+      ? `collecting ${face.baseline_buffer_size ?? 0}/${face.baseline_required_frames}`
+      : '—';
+  return [
+    `Liveness: ${face.final_status ?? face.liveness_state ?? '—'}`,
+    `Reason: ${fmtText(face.final_reason_code)}`,
+    `Blinks: ${face.blink_count ?? 0}/${face.min_blinks_required ?? 1}`,
+    `Eye: ${fmtText(face.eye_state)}`,
+    `EAR: ${fmt(face.current_ear_avg)}`,
+    `Base: ${baseline}`,
+    `Drop/Rec ratios: ${fmt(face.drop_ratio)}/${fmt(face.recovery_ratio)}`,
+    `Dn/Rc thr: ${face.blink_down_threshold != null ? fmt(face.blink_down_threshold) : 'wait'}/${face.blink_recovery_threshold != null ? fmt(face.blink_recovery_threshold) : 'wait'}`,
+    `Texture: ${fmtText(face.texture_combined_status)}`,
+    `Quality: ${fmtText(face.face_quality_status)}`,
+  ];
+}
+
+function getFaceLogKey(face: WsFace) {
+  if (face.is_warming_up) {
+    return `warming:${face.track_id ?? 'na'}`;
+  }
+  if (face.is_spoofing) {
+    return `spoof:${face.track_id ?? 'na'}`;
+  }
+  if (face.person_id != null) {
+    return `person:${face.person_id}`;
+  }
+  return `unknown:${face.track_id ?? 'na'}`;
+}
+
+function buildEventKey(faces: WsFace[]) {
+  return faces
+    .map(getFaceLogKey)
+    .sort()
+    .join('|');
 }
 
 // Кольори для різних зон обличчя
@@ -104,6 +154,10 @@ function mirrorLandmarks(
 }
 
 export default function Webcam() {
+  const params = useParams();
+  const cameraId = Number(params.id);
+  const camera = Number.isFinite(cameraId) ? getDemoCameraById(cameraId) : null;
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const displayCanvasRef = useRef<HTMLCanvasElement>(null);
   const captureCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -112,15 +166,21 @@ export default function Webcam() {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const frameInFlightRef = useRef(false);
   const wsConnectedRef = useRef(false);
+  const lastEventAtRef = useRef<Map<string, number>>(new Map());
 
   const [streamActive, setStreamActive] = useState(false);
   const [wsConnected, setWsConnected] = useState(false);
   const [fps, setFps] = useState(0);
   const [processingMs, setProcessingMs] = useState(0);
   const [events, setEvents] = useState<FaceEvent[]>([]);
+  const [faces, setFaces] = useState<WsFace[]>([]);
   const [frameRate, setFrameRate] = useState(30);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [videoReady, setVideoReady] = useState(false);
+
+  if (!camera) {
+    return <Navigate to="/cameras" replace />;
+  }
 
   // ── Camera ────────────────────────────────────────────────────────
 
@@ -210,8 +270,10 @@ export default function Webcam() {
     setStreamActive(false);
     setWsConnected(false);
     setVideoReady(false);
+    setEvents([]);
     wsConnectedRef.current = false;
     frameInFlightRef.current = false;
+    lastEventAtRef.current.clear();
     if (intervalRef.current) {
       clearInterval(intervalRef.current);
       intervalRef.current = null;
@@ -221,10 +283,11 @@ export default function Webcam() {
 
   // ── WebSocket ─────────────────────────────────────────────────────
 
-  const connectWs = useCallback(() => {
-    const token = localStorage.getItem('access_token');
+  const connectWs = useCallback(async () => {
+    const token = await getValidAccessToken();
     if (!token) {
-      toast.error('Немає токена авторизації');
+      toast.error('Сесія авторизації недійсна. Увійдіть повторно.');
+      window.location.href = '/login';
       return;
     }
 
@@ -233,7 +296,7 @@ export default function Webcam() {
       wsRef.current = null;
     }
 
-    const ws = new WebSocket(`${WS_BASE}/ws/webcam/?token=${token}`);
+    const ws = new WebSocket(`${WS_BASE}/ws/webcam/?token=${token}&camera_id=${camera.id}`);
     wsRef.current = ws;
 
     ws.onopen = () => {
@@ -243,12 +306,28 @@ export default function Webcam() {
       toast.success('З\'єднання з сервером встановлено');
     };
 
-    ws.onclose = () => {
+    ws.onclose = async (event) => {
       console.log('[Webcam] WS closed');
       setWsConnected(false);
       wsConnectedRef.current = false;
       setFps(0);
       frameInFlightRef.current = false;
+
+      if (event.code === 4001) {
+        const refreshedToken = await refreshAccessToken();
+        if (refreshedToken) {
+          const retryWs = new WebSocket(`${WS_BASE}/ws/webcam/?token=${refreshedToken}&camera_id=${camera.id}`);
+          wsRef.current = retryWs;
+          retryWs.onopen = ws.onopen;
+          retryWs.onclose = ws.onclose;
+          retryWs.onerror = ws.onerror;
+          retryWs.onmessage = ws.onmessage;
+          return;
+        }
+
+        toast.error('Сесію завершено. Потрібен повторний вхід.');
+        window.location.href = '/login';
+      }
     };
 
     ws.onerror = (e) => {
@@ -264,6 +343,7 @@ export default function Webcam() {
           frameInFlightRef.current = false;
           setFps(data.fps ?? 0);
           setProcessingMs(data.processing_ms ?? 0);
+          setFaces((data.faces as WsFace[]) ?? []);
 
           const canvas = displayCanvasRef.current;
           const video = videoRef.current;
@@ -284,6 +364,8 @@ export default function Webcam() {
           data.faces?.forEach((face: WsFace) => {
             const color = face.is_warming_up
               ? '#6b7280'
+              : face.is_in_cooldown
+                ? '#38bdf8'
               : face.is_spoofing ? '#ef4444'
               : face.is_known ? '#10b981'
               : '#f59e0b';
@@ -308,16 +390,17 @@ export default function Webcam() {
             }
 
             // Label
-            let label = face.is_warming_up ? '⏳ Warming up...' : (face.person_name ?? 'Unknown');
+            let label = face.is_warming_up
+              ? '⏳ Warming up...'
+              : face.is_in_cooldown
+                ? '⏸ Cooldown'
+                : (face.person_name ?? 'Unknown');
             if (face.track_id != null) label += ` #${face.track_id}`;
-            if (!face.is_warming_up && face.confidence != null) label += ` ${face.confidence.toFixed(0)}%`;
+            if (!face.is_warming_up && !face.is_in_cooldown && face.confidence != null) label += ` ${face.confidence.toFixed(0)}%`;
             if (face.is_spoofing) {
-              const reason = face.texture_is_spoof
-                ? `texture tx:${face.texture_score.toFixed(2)}`
-                : face.liveness_is_spoofing
-                  ? 'liveness'
-                  : `combined tx:${face.texture_score.toFixed(2)}`;
-              label = `⚠ SPOOF (${reason})`;
+              label = `⚠ SPOOF (${face.liveness_reason ?? 'blink check failed'})`;
+            } else if (face.liveness_state === 'INSUFFICIENT_DATA') {
+              label = '… Insufficient data';
             }
 
             // Position label near the face
@@ -338,14 +421,57 @@ export default function Webcam() {
             ctx.textAlign = 'center';
             ctx.fillText(label, labelX, labelY - 6);
             ctx.textAlign = 'start';
+
+            if (face.debug_enabled || face.current_ear_avg !== undefined || face.current_ear_avg === null) {
+              const lines = debugLines(face);
+              const overlayX = mirroredBBox.left;
+              const overlayY = mirroredBBox.bottom + 8;
+              const lineHeight = 12;
+              const panelWidth = 170;
+              const panelHeight = (lines.length * lineHeight) + 10;
+              ctx.fillStyle = 'rgba(0,0,0,0.68)';
+              ctx.fillRect(overlayX, overlayY, panelWidth, panelHeight);
+              ctx.fillStyle = '#ffffff';
+              ctx.font = '11px monospace';
+              lines.forEach((line, idx) => {
+                ctx.fillText(line, overlayX + 6, overlayY + 14 + (idx * lineHeight));
+              });
+            }
           });
 
           // Log events
           if (data.faces?.length) {
-            setEvents(prev => [{
-              ts: new Date().toLocaleTimeString('uk-UA'),
-              faces: data.faces,
-            }, ...prev].slice(0, 20));
+            const activeFaces = (data.faces as WsFace[]).filter(
+              face => !face.is_warming_up && !face.is_in_cooldown && face.liveness_state !== 'INSUFFICIENT_DATA',
+            );
+            if (activeFaces.length > 0) {
+              const now = Date.now();
+              const eventKey = buildEventKey(activeFaces);
+              const lastEventAt = lastEventAtRef.current.get(eventKey) ?? 0;
+
+              setEvents(prev => {
+                if (now - lastEventAt < EVENT_LOG_COOLDOWN_MS) {
+                  return prev.map(event =>
+                    event.key === eventKey
+                      ? {
+                          ...event,
+                          ts: new Date().toLocaleTimeString('uk-UA'),
+                          faces: activeFaces,
+                          count: event.count + 1,
+                        }
+                      : event
+                  );
+                }
+
+                lastEventAtRef.current.set(eventKey, now);
+                return [{
+                  key: eventKey,
+                  ts: new Date().toLocaleTimeString('uk-UA'),
+                  faces: activeFaces,
+                  count: 1,
+                }, ...prev].slice(0, 20);
+              });
+            }
           }
         }
 
@@ -357,7 +483,7 @@ export default function Webcam() {
         console.error('[Webcam] WS message parse error:', err);
       }
     };
-  }, []);
+  }, [camera.id]);
 
   const disconnectWs = useCallback(() => {
     if (wsRef.current) {
@@ -372,7 +498,7 @@ export default function Webcam() {
 
   useEffect(() => {
     if (streamActive && !wsConnected) {
-      connectWs();
+      void connectWs();
     }
     return () => {
       if (!streamActive) disconnectWs();
@@ -429,12 +555,20 @@ export default function Webcam() {
   // ── Render ────────────────────────────────────────────────────────
 
   return (
-    <Layout title="Веб-камера">
+    <Layout title={camera.name}>
       <div className="page-header">
         <div>
-          <h1>Веб-камера</h1>
+          <div className="mb-3">
+            <Button asChild variant="ghost" size="sm" className="text-white/60 hover:text-white px-0">
+              <Link to="/cameras">
+                <ArrowLeft size={14} />
+                Назад до камер
+              </Link>
+            </Button>
+          </div>
+          <h1>{camera.name}</h1>
           <div className="page-subtitle">
-            Розпізнавання облич через камеру ноутбука в реальному часі
+            {camera.location} • Розпізнавання, spoofing-аналіз і події в реальному часі
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -457,11 +591,11 @@ export default function Webcam() {
 
       <Separator className="mb-6 bg-white/10" />
 
-      <div className="flex flex-wrap items-center gap-3 mb-6">
+        <div className="flex flex-wrap items-center gap-3 mb-6">
         {!streamActive ? (
           <Button onClick={startCamera} className="gap-2">
             <CameraIcon size={16} />
-            Увімкнути камеру
+            Увімкнути {camera.name}
           </Button>
         ) : (
           <Button variant="destructive" onClick={stopCamera} className="gap-2">
@@ -516,8 +650,8 @@ export default function Webcam() {
       {!streamActive ? (
         <div className="empty-state">
           <CameraIcon size={48} className="mx-auto mb-3 text-white/20" />
-          <p>Камеру не підключено.</p>
-          <p className="text-xs mt-1">Натисніть «Увімкнути камеру» для початку розпізнавання.</p>
+          <p>{camera.name} ще не підключена.</p>
+          <p className="text-xs mt-1">Натисніть «Увімкнути {camera.name}» для початку розпізнавання.</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -604,6 +738,82 @@ export default function Webcam() {
           </div>
 
           <div className="lg:col-span-1">
+            <div className="rounded-lg border border-white/10 bg-[var(--fg-surface)] overflow-hidden mb-4">
+              <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between gap-2">
+                <h3 className="text-sm font-semibold text-white/80">Liveness Diagnostics</h3>
+                <Badge className={`${faces.some(face => face.debug_enabled) ? 'bg-cyan-500/20 text-cyan-300' : 'bg-white/10 text-white/40'} border-0`}>
+                  {faces.some(face => face.debug_enabled) ? 'DEBUG ON' : 'DEBUG OFF'}
+                </Badge>
+              </div>
+              <ScrollArea className="h-[240px]">
+                <div className="p-3 space-y-3">
+                  {!faces.length && (
+                    <div className="text-center text-xs text-white/30 py-8">
+                      Очікування liveness cycle...
+                    </div>
+                  )}
+                  {faces.map((face, idx) => (
+                    <div key={`${face.track_id ?? 'na'}-${idx}`} className="rounded-lg border border-white/10 bg-black/20 p-3">
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <div className="text-xs text-white/80">
+                          Track #{face.track_id ?? '—'} • {face.final_status ?? face.liveness_state ?? '—'}
+                        </div>
+                        <Badge className="bg-white/10 text-white/70 border-0 text-[10px]">
+                          {face.final_module_name ?? '—'}
+                        </Badge>
+                      </div>
+                      {!face.debug_enabled && (
+                        <div className="mb-2 rounded bg-amber-500/10 border border-amber-500/20 px-2 py-1 text-[11px] text-amber-200">
+                          DEBUG OFF. {face.debug_hint ?? 'Set LIVENESS_DEBUG_OVERLAY=True for raw debug object and structured logs.'}
+                        </div>
+                      )}
+                      <div className="grid grid-cols-2 gap-2 text-[11px] text-white/70">
+                        <div>Liveness: {fmtText(face.liveness_state)}</div>
+                        <div>Final: {fmtText(face.final_status)}</div>
+                        <div>Reason: {fmtText(face.final_reason_code)}</div>
+                        <div>Module: {fmtText(face.final_module_name)}</div>
+                        <div>Blinks: {face.blink_count ?? 0}/{face.min_blinks_required ?? 1}</div>
+                        <div>Blink status: {fmtText(face.blink_liveness_status)}</div>
+                        <div>Eye: {fmtText(face.eye_state)}</div>
+                        <div>EAR avg: {fmt(face.current_ear_avg)}</div>
+                        <div>EAR L/R: {fmt(face.current_ear_left)}/{fmt(face.current_ear_right)}</div>
+                        <div>Smoothed: {fmt(face.smoothed_ear)}</div>
+                        <div>
+                          Baseline: {face.open_eye_baseline != null
+                            ? fmt(face.open_eye_baseline)
+                            : face.baseline_required_frames != null
+                              ? `collecting ${face.baseline_buffer_size ?? 0}/${face.baseline_required_frames}`
+                              : '—'}
+                        </div>
+                        <div>Drop ratio: {fmt(face.drop_ratio)}</div>
+                        <div>Recovery ratio: {fmt(face.recovery_ratio)}</div>
+                        <div>
+                          Down threshold: {face.blink_down_threshold != null ? fmt(face.blink_down_threshold) : 'waiting_for_baseline'}
+                        </div>
+                        <div>
+                          Recovery threshold: {face.blink_recovery_threshold != null ? fmt(face.blink_recovery_threshold) : 'waiting_for_baseline'}
+                        </div>
+                        <div>Baseline state: {fmtText(face.baseline_state)}</div>
+                        <div>Blink state: {fmtText(face.blink_internal_state)}</div>
+                        <div>Closed/Open frames: {face.frames_closed_count ?? '—'}/{face.frames_open_count ?? '—'}</div>
+                        <div>Valid/Missing EAR: {face.valid_ear_frames_count ?? '—'}/{face.missing_landmarks_count ?? '—'}</div>
+                        <div>Min/Max EAR: {fmt(face.min_ear_seen_during_warmup)}/{fmt(face.max_ear_seen_during_warmup)}</div>
+                        <div>Prev eye: {fmtText(face.previous_eye_state)}</div>
+                        <div>Warmup: {fmt(face.warmup_elapsed_seconds, 2)}s / rem {fmt(face.warmup_remaining_seconds, 2)}s</div>
+                        <div>Cooldown rem: {fmt(face.cooldown_remaining_seconds, 2)}s</div>
+                        <div>Texture: {fmtText(face.texture_combined_status)}</div>
+                        <div>LBP/Sobel/FFT: {fmtText(face.texture_lbp_status)}/{fmtText(face.texture_sobel_status)}/{fmtText(face.texture_fft_status)}</div>
+                        <div>Face quality: {fmtText(face.face_quality_status)}</div>
+                        <div>Score: {fmt(face.texture_score)}</div>
+                        <div>Detector called: {fmtBool(face.blink_detector_called)}</div>
+                        <div>Landmarks found: {fmtBool(face.landmarks_found)}</div>
+                        <div>Reason code: {fmtText(face.blink_reason_code)}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            </div>
             <div className="rounded-lg border border-white/10 bg-[var(--fg-surface)] overflow-hidden">
               <div className="px-4 py-3 border-b border-white/10">
                 <h3 className="text-sm font-semibold text-white/80">Події розпізнавання</h3>
@@ -615,9 +825,16 @@ export default function Webcam() {
                       Очікування облич...
                     </div>
                   ) : (
-                    events.map((ev, i) => (
-                      <div key={i} className="p-2 rounded bg-white/5 text-xs">
-                        <span className="text-white/30">{ev.ts}</span>
+                    events.map((ev) => (
+                      <div key={`${ev.key}-${ev.ts}`} className="p-2 rounded bg-white/5 text-xs">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-white/30">{ev.ts}</span>
+                          {ev.count > 1 && (
+                            <Badge className="bg-white/10 text-white/60 border-0 text-[10px]">
+                              x{ev.count}
+                            </Badge>
+                          )}
+                        </div>
                         <div className="flex flex-wrap gap-1 mt-1">
                           {ev.faces.map((f, j) => (
                             <Badge
@@ -631,13 +848,7 @@ export default function Webcam() {
                             >
                               {f.is_spoofing && <AlertTriangle size={9} className="mr-1" />}
                               {f.is_warming_up ? '⏳ Warming up'
-                                : f.is_spoofing ? `SPOOF ${
-                                  f.texture_is_spoof
-                                    ? `texture tx:${f.texture_score.toFixed(2)}`
-                                    : f.liveness_is_spoofing
-                                      ? 'liveness'
-                                      : `combined tx:${f.texture_score.toFixed(2)}`
-                                }`
+                                : f.is_spoofing ? 'SPOOF blink failed'
                                 : `${f.person_name ?? 'Unknown'}${f.track_id != null ? ` #${f.track_id}` : ''}${f.confidence != null ? ` ${f.confidence.toFixed(0)}%` : ''}`
                               }
                             </Badge>

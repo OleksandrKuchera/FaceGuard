@@ -5,13 +5,14 @@ import datetime
 from django.db.models import Count, Q, F, Value
 from django.db.models.functions import ExtractHour, Concat
 from django.utils import timezone
-from rest_framework import viewsets, status
+from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from apps.core.permissions import IsGuardOrAbove
-from apps.events.models import RecognitionEvent, DailyStats
-from apps.events.serializers import RecognitionEventSerializer, DailyStatsSerializer
+from apps.events.analytics import get_or_build_daily_stats
+from apps.events.models import RecognitionEvent
+from apps.events.serializers import RecognitionEventSerializer
 
 
 class RecognitionEventViewSet(viewsets.ReadOnlyModelViewSet):
@@ -20,6 +21,7 @@ class RecognitionEventViewSet(viewsets.ReadOnlyModelViewSet):
     filterset_fields = ["camera", "person", "event_type", "is_alert"]
     ordering_fields = ["timestamp", "confidence"]
     ordering = ["-timestamp"]
+    search_fields = ["person__person_id", "person__first_name", "person__last_name", "camera__name"]
 
     def get_queryset(self):
         qs = RecognitionEvent.objects.select_related("camera", "person", "reviewed_by")
@@ -28,6 +30,15 @@ class RecognitionEventViewSet(viewsets.ReadOnlyModelViewSet):
             qs = qs.filter(timestamp__date__gte=date_from)
         if date_to := self.request.query_params.get("date_to"):
             qs = qs.filter(timestamp__date__lte=date_to)
+        if person := self.request.query_params.get("person"):
+            person_filter = (
+                Q(person__person_id__icontains=person)
+                | Q(person__first_name__icontains=person)
+                | Q(person__last_name__icontains=person)
+            )
+            if person.isdigit():
+                person_filter |= Q(person__id=int(person))
+            qs = qs.filter(person_filter)
 
         return qs
 
@@ -47,8 +58,12 @@ class RecognitionEventViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=["get"])
     def daily_stats(self, request):
         """Historical daily stats."""
-        qs = DailyStats.objects.all()[:30]
-        return Response(DailyStatsSerializer(qs, many=True).data)
+        today = timezone.localdate()
+        rows = [
+            get_or_build_daily_stats(today - datetime.timedelta(days=offset))
+            for offset in range(29, -1, -1)
+        ]
+        return Response(rows)
 
     @action(detail=False, methods=["get"])
     def hourly_heatmap(self, request):

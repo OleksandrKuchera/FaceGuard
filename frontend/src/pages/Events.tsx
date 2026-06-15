@@ -90,7 +90,9 @@ function EventSnapshotDialog({ event, open, onClose }: {
             <div className="bg-white/5 rounded-lg p-3 flex flex-col gap-1">
               <span className="text-white/40 text-xs uppercase tracking-wider">Особа</span>
               <span className="text-white font-medium">
-                {event.person ? `${event.person.full_name} (${event.person.person_id})` : <span className="text-amber-400">Невідомий</span>}
+                {event.person
+                  ? `${event.person.full_name} (${event.person.person_id})`
+                  : <span className="text-amber-400">{event.person_display ?? 'Невідомий'}</span>}
               </span>
             </div>
             <div className="bg-white/5 rounded-lg p-3 flex flex-col gap-1">
@@ -126,6 +128,22 @@ function EventSnapshotDialog({ event, open, onClose }: {
                 ? <Badge className="bg-red-500/20 text-red-400 border-0 w-fit gap-1"><AlertTriangle size={10} />Так</Badge>
                 : <span className="text-white/40">—</span>}
             </div>
+            {event.spoofing_meta && (
+              <div className="bg-white/5 rounded-lg p-3 flex flex-col gap-1 col-span-2">
+                <span className="text-white/40 text-xs uppercase tracking-wider">Деталі spoofing</span>
+                <div className="flex flex-wrap gap-2 text-xs">
+                  <Badge className="bg-red-500/20 text-red-300 border-0">
+                    {event.spoofing_meta.attack_type_display}
+                  </Badge>
+                  <Badge className="bg-white/10 text-white/70 border-0">
+                    EAR: {event.spoofing_meta.ear_value != null ? event.spoofing_meta.ear_value.toFixed(3) : '—'}
+                  </Badge>
+                  <Badge className="bg-white/10 text-white/70 border-0">
+                    Texture: {event.spoofing_meta.texture_score != null ? event.spoofing_meta.texture_score.toFixed(3) : '—'}
+                  </Badge>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -369,7 +387,7 @@ export default function Events() {
                             {ev.person.full_name}{' '}
                             <span className="text-blue-400 font-mono text-xs">({ev.person.person_id})</span>
                           </Link>
-                        : <span className="text-amber-400">невідомий</span>}
+                        : <span className="text-amber-400">{ev.person_display ?? 'невідомий'}</span>}
                     </TableCell>
                     <TableCell className="text-white/60 text-sm">{ev.camera?.name}</TableCell>
                     <TableCell>

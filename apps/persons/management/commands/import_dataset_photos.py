@@ -84,13 +84,15 @@ class Command(BaseCommand):
 
         for current_pid, current_files in sorted(grouped_files.items()):
             current_name = person_name if person_id and current_pid == person_id and person_name else current_pid
+            first_name, last_name = self._infer_name_parts(current_name)
 
             person, created = Person.objects.get_or_create(
                 person_id=current_pid,
                 defaults={
-                    "first_name": current_name,
-                    "last_name": current_name,
+                    "first_name": first_name,
+                    "last_name": last_name,
                     "role": "staff",
+                    "is_active": True,
                 },
             )
             if created:
@@ -103,12 +105,15 @@ class Command(BaseCommand):
                 person.consent_given = True
                 person.consent_date = timezone.now()
                 changed_fields.extend(["consent_given", "consent_date"])
-            if not person.first_name:
-                person.first_name = current_name
+            if not person.first_name or person.first_name.casefold() == person.person_id.casefold():
+                person.first_name = first_name
                 changed_fields.append("first_name")
-            if not person.last_name:
-                person.last_name = current_name
+            if not person.last_name or person.last_name.casefold() == person.person_id.casefold():
+                person.last_name = last_name
                 changed_fields.append("last_name")
+            if not person.is_active:
+                person.is_active = True
+                changed_fields.append("is_active")
             if changed_fields:
                 person.save(update_fields=changed_fields)
 
@@ -196,3 +201,22 @@ class Command(BaseCommand):
         value = value.strip()
         value = re.sub(r"[^0-9A-Za-z_-]+", "_", value)
         return value[:50] or "unknown"
+
+    @staticmethod
+    def _infer_name_parts(value: str) -> tuple[str, str]:
+        cleaned = value.replace("_", " ").replace("-", " ").strip()
+        cleaned = re.sub(r"(?<=[a-zа-я])(?=[A-ZА-Я])", " ", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned)
+        parts = [part for part in cleaned.split(" ") if part]
+
+        def prettify(token: str) -> str:
+            return token[:1].upper() + token[1:] if token else token
+
+        if not parts:
+            return ("Unknown", "Unknown")
+        if len(parts) == 1:
+            pretty = prettify(parts[0])
+            return (pretty, pretty)
+        if len(parts) == 2:
+            return (prettify(parts[0]), prettify(parts[1]))
+        return (prettify(" ".join(parts[:-1])), prettify(parts[-1]))

@@ -5,7 +5,6 @@ import logging
 from datetime import timedelta
 
 from celery import shared_task
-from django.db.models import Count, Q
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
@@ -111,28 +110,20 @@ def compute_daily_stats():
     """Celery beat task: compute daily stats for yesterday (runs at 00:05)."""
     from django.db import close_old_connections
     close_old_connections()
-    from apps.events.models import RecognitionEvent, DailyStats
+    from apps.events.analytics import aggregate_stats_for_date
+    from apps.events.models import DailyStats
 
     yesterday = (timezone.now() - timedelta(days=1)).date()
-
-    stats = RecognitionEvent.objects.filter(
-        timestamp__date=yesterday
-    ).aggregate(
-        total=Count("id"),
-        recognized=Count("id", filter=Q(event_type="recognized")),
-        unknown=Count("id", filter=Q(event_type="unknown")),
-        spoofing=Count("id", filter=Q(event_type="spoofing")),
-        unique_persons=Count("person", distinct=True),
-    )
+    stats = aggregate_stats_for_date(yesterday)
 
     DailyStats.objects.update_or_create(
         date=yesterday,
         defaults={
-            "total_events": stats["total"] or 0,
-            "recognized": stats["recognized"] or 0,
-            "unknown": stats["unknown"] or 0,
-            "spoofing_attempts": stats["spoofing"] or 0,
-            "unique_persons": stats["unique_persons"] or 0,
+            "total_events": stats["total_events"],
+            "recognized": stats["recognized"],
+            "unknown": stats["unknown"],
+            "spoofing_attempts": stats["spoofing_attempts"],
+            "unique_persons": stats["unique_persons"],
         },
     )
     logger.info(f"Daily stats computed for {yesterday}: {stats}")

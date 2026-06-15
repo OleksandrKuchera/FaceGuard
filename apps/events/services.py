@@ -54,8 +54,13 @@ class EventService:
     ) -> list[RecognitionEvent]:
         events = []
 
-        # Exclude faces still in the liveness warm-up window — no real decision yet.
-        active_faces = [f for f in result.faces if not f.is_warming_up]
+        # Exclude faces without a final actionable decision yet.
+        active_faces = [
+            f for f in result.faces
+            if not f.is_warming_up
+            and not getattr(f, "is_in_cooldown", False)
+            and getattr(f, "liveness_state", "") not in {"INSUFFICIENT_DATA"}
+        ]
 
         if not active_faces:
             return events
@@ -172,6 +177,10 @@ class EventService:
                 attack_type=attack_type,
                 ear_value=ear_value,
                 texture_score=texture_score,
+                frame_evidence=event.frame_snapshot,
+                final_status=getattr(face, "liveness_state", None),
+                final_reason_code=getattr(face, "final_reason_code", None),
+                final_module_name=getattr(face, "final_module_name", None),
             )
         except Exception as e:
             logger.error(f"Failed to create SpoofingAttempt for event {event.id}: {e}")

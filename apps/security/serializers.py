@@ -14,6 +14,7 @@ class SpoofingAttemptSerializer(serializers.ModelSerializer):
             "id", "camera", "camera_name", "event",
             "attack_type", "ear_value", "texture_score",
             "frame_evidence", "detected_at", "ip_address",
+            "final_status", "final_reason_code", "final_module_name",
         ]
 
 

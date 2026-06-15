@@ -26,6 +26,10 @@ class SpoofingAttempt(models.Model):
 
     frame_evidence = models.ImageField(upload_to="security/spoofing/", null=True, blank=True)
 
+    final_status = models.CharField(max_length=50, null=True, blank=True)
+    final_reason_code = models.CharField(max_length=100, null=True, blank=True)
+    final_module_name = models.CharField(max_length=100, null=True, blank=True)
+
     detected_at = models.DateTimeField(auto_now_add=True)
     ip_address = models.GenericIPAddressField(null=True, blank=True)
 

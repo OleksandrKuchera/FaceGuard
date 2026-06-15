@@ -2,9 +2,8 @@ import { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '@/store/authStore';
 import {
-  LayoutDashboard, Video, Users, Camera, Eye,
-  FileText, ShieldAlert, LogOut, Shield, ChevronDown,
-  UserCog, Settings, Menu, Scan,
+  LayoutDashboard, Users, Camera, LogOut, Shield, ChevronDown,
+  Menu,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { Separator } from '@/components/ui/separator';
@@ -27,15 +26,8 @@ import { Button } from '@/components/ui/button';
 
 const NAV = [
   { to: '/',         icon: LayoutDashboard, label: 'Dashboard' },
-  { to: '/monitor',  icon: Video,           label: 'Live Monitor' },
-  { to: '/webcam',   icon: Scan,            label: 'Веб-камера' },
   { to: '/persons',  icon: Users,           label: 'Особи' },
   { to: '/cameras',  icon: Camera,          label: 'Камери' },
-  { to: '/events',   icon: Eye,             label: 'Події' },
-  { to: '/reports',  icon: FileText,        label: 'Звіти' },
-  { to: '/security', icon: ShieldAlert,     label: 'Безпека' },
-  { to: '/users',    icon: UserCog,         label: 'Користувачі' },
-  { to: '/settings', icon: Settings,        label: 'Налаштування' },
 ];
 
 const ROLE_LABELS: Record<string, string> = {

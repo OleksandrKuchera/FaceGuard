@@ -133,6 +133,8 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"
+    volumes:
+      - media_data:/usr/share/nginx/media:ro
     depends_on:
       - web
 
